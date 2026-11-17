@@ -2,84 +2,49 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Karaoke Booking - réservations</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #222; }
-    h1 { margin-bottom: .2rem; }
-    .etat { padding: .7rem 1rem; border-radius: 6px; margin: 1rem 0; font-weight: bold; }
-    .ok { background: #e0f2f1; color: #00695c; }
-    .ko { background: #fdecea; color: #b71c1c; }
-    .conteneur { color: #666; font-size: .9rem; }
-    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
-    th, td { text-align: left; padding: .4rem; border-bottom: 1px solid #ddd; }
-    form { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
-    input, select, button { padding: .5rem; font: inherit; }
-    button { grid-column: span 2; cursor: pointer; }
-    #message { color: #b71c1c; }
-  </style>
+  <title>Karaoke Booking</title>
 </head>
 <body>
   <h1>Karaoke Booking</h1>
-  <p class="conteneur">Réservation de places pour des sessions de karaoké (données fictives)</p>
-
-  <div id="etat" class="etat ko">Base : ...</div>
-  <p class="conteneur">Cette page est servie par le conteneur : <strong id="conteneur">...</strong></p>
 
   <h2>Réservations</h2>
-  <table>
-    <thead><tr><th>Jour</th><th>Créneau</th><th>Salon</th><th>Nom</th><th>Places</th></tr></thead>
-    <tbody id="liste"><tr><td colspan="5">Chargement...</td></tr></tbody>
-  </table>
+  <ul id="liste"></ul>
 
-  <h2>Réserver un salon</h2>
+  <h2>Réserver</h2>
   <form id="formulaire">
     <select name="salon" required>
-      <option value="">Choisir un salon</option>
       <option>Salon Disco</option>
       <option>Salon Rock</option>
       <option>Salon Pop</option>
       <option>Salon Jazz</option>
     </select>
     <input name="jour" type="date" required>
-    <input name="creneau" placeholder="Créneau (ex. 20:00 - 22:00)" required>
-    <input name="nom" placeholder="Nom de la réservation" required>
-    <input name="places" type="number" min="1" max="12" placeholder="Nombre de places (1 à 12)" required>
-    <button type="submit">Réserver</button>
+    <input name="creneau" placeholder="20:00 - 22:00" required>
+    <input name="nom" placeholder="Nom" required>
+    <input name="places" type="number" min="1" max="12" placeholder="Places" required>
+    <button>Réserver</button>
   </form>
   <p id="message"></p>
 
   <script>
-    async function rafraichir() {
-      const sante = await fetch("/api/sante").then((r) => r.json());
-      const etat = document.getElementById("etat");
-      etat.textContent = "Base : " + sante.base;
-      etat.className = "etat " + (sante.base === "connectée" ? "ok" : "ko");
-      document.getElementById("conteneur").textContent = sante.conteneur;
-
-      const liste = document.getElementById("liste");
+    async function afficher() {
       const reponse = await fetch("/api/reservations");
+      const liste = document.getElementById("liste");
+      liste.innerHTML = "";
       if (!reponse.ok) {
-        liste.innerHTML = '<tr><td colspan="5">Pas de base de données : rien à afficher pour l\'instant.</td></tr>';
+        liste.textContent = "Base non connectée";
         return;
       }
-      const reservations = await reponse.json();
-      liste.innerHTML = "";
-      for (const r of reservations) {
-        const ligne = document.createElement("tr");
-        for (const valeur of [r.jour, r.creneau, r.salon, r.nom, r.places]) {
-          const cellule = document.createElement("td");
-          cellule.textContent = valeur;
-          ligne.appendChild(cellule);
-        }
-        liste.appendChild(ligne);
+      for (const r of await reponse.json()) {
+        const li = document.createElement("li");
+        li.textContent = `${r.jour} ${r.creneau} - ${r.salon} - ${r.nom} (${r.places} places)`;
+        liste.appendChild(li);
       }
     }
 
     document.getElementById("formulaire").addEventListener("submit", async (e) => {
       e.preventDefault();
       const donnees = Object.fromEntries(new FormData(e.target));
-      donnees.places = Number(donnees.places);
       const reponse = await fetch("/api/reservations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -90,14 +55,12 @@
         message.textContent = "";
         e.target.reset();
       } else {
-        const erreur = await reponse.json();
-        message.textContent = "Impossible d'enregistrer : " + erreur.erreur;
+        message.textContent = (await reponse.json()).erreur;
       }
-      rafraichir();
+      afficher();
     });
 
-    rafraichir();
-    setInterval(rafraichir, 3000);
+    afficher();
   </script>
 </body>
 </html>
