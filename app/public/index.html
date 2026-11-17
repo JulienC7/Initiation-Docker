@@ -2,73 +2,104 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Karaoke Booking</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tilt+Neon&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1>Karaoke Booking</h1>
+  <div class="bandeau">
+    <div class="piste">
+      <span>Salon Disco ✦ Salon Rock ✦ Salon Pop ✦ Salon Jazz ✦ Salon Disco ✦ Salon Rock ✦ Salon Pop ✦ Salon Jazz ✦ Salon Disco ✦ Salon Rock ✦ Salon Pop ✦ Salon Jazz ✦ </span>
+      <span>Salon Disco ✦ Salon Rock ✦ Salon Pop ✦ Salon Jazz ✦ Salon Disco ✦ Salon Rock ✦ Salon Pop ✦ Salon Jazz ✦ Salon Disco ✦ Salon Rock ✦ Salon Pop ✦ Salon Jazz ✦ </span>
+    </div>
+  </div>
 
-  <h2>Nos salons</h2>
-  <ul id="salons"></ul>
+  <header>
+    <h1>Karaoke <span>Booking</span></h1>
+    <p class="paroles">Réserve ton salon, prends le micro.</p>
+    <!-- Égaliseur : 9 barres animées en CSS -->
+    <div class="egaliseur" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  </header>
 
-  <h2>Réserver</h2>
-  <form id="form">
-    <select name="salon" id="choix-salon"></select>
-    <input name="jour" type="date" required>
-    <select name="creneau">
-      <option>18:00 - 20:00</option>
-      <option>20:00 - 22:00</option>
-      <option>22:00 - 00:00</option>
-    </select>
-    <input name="nom" placeholder="Votre nom" required>
-    <input name="places" type="number" min="1" placeholder="Places" required>
-    <button>Réserver</button>
-  </form>
-  <p id="message"></p>
+  <main>
+    <section>
+      <h2>Réservations</h2>
+      <ul id="liste"></ul>
+    </section>
 
-  <h2>Réservations</h2>
-  <table border="1">
-    <thead>
-      <tr><th>Jour</th><th>Créneau</th><th>Salon</th><th>Nom</th><th>Places</th><th>Places libres</th><th></th></tr>
-    </thead>
-    <tbody id="reservations"></tbody>
-  </table>
+    <section>
+      <h2>Réserver</h2>
+      <form id="formulaire">
+        <select name="salon" id="choix-salon" required></select>
+        <input name="jour" type="date" required>
+        <select name="creneau">
+          <option>18:00 - 20:00</option>
+          <option>20:00 - 22:00</option>
+          <option>22:00 - 00:00</option>
+        </select>
+        <input name="nom" placeholder="Nom" required>
+        <input name="places" type="number" min="1" placeholder="Places" required>
+        <button>Réserver</button>
+      </form>
+      <p id="message"></p>
+    </section>
+  </main>
 
   <script>
+    function span(classe, texte) {
+      const s = document.createElement("span");
+      s.className = classe;
+      s.textContent = texte;
+      return s;
+    }
+
+    // Remplit la liste des salons du formulaire
     async function chargerSalons() {
       const salons = await fetch("/api/salons").then((r) => r.json());
-      document.getElementById("salons").innerHTML = salons
-        .map((s) => `<li>${s.nom} : ${s.capacite} places</li>`)
-        .join("");
       document.getElementById("choix-salon").innerHTML = salons
         .map((s) => `<option>${s.nom}</option>`)
         .join("");
     }
 
-    async function chargerReservations() {
+    async function afficher() {
       const reservations = await fetch("/api/reservations").then((r) => r.json());
-      const tbody = document.getElementById("reservations");
-      tbody.innerHTML = "";
+      const liste = document.getElementById("liste");
+      liste.innerHTML = "";
       for (const r of reservations) {
-        const tr = document.createElement("tr");
-        for (const valeur of [r.jour, r.creneau, r.salon, r.nom, r.places, r.libres]) {
-          const td = document.createElement("td");
-          td.textContent = valeur;
-          tr.appendChild(td);
-        }
+        const libres = Number(r.libres);
+
         const bouton = document.createElement("button");
+        bouton.className = "annuler";
         bouton.textContent = "Annuler";
         bouton.onclick = () => annuler(r.id);
-        tr.appendChild(document.createElement("td")).appendChild(bouton);
-        tbody.appendChild(tr);
+
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        actions.append(
+          span(libres === 0 ? "reste complet" : "reste", libres === 0 ? "complet" : `reste ${libres} places`),
+          bouton
+        );
+
+        const li = document.createElement("li");
+        li.append(
+          span("salon", r.salon),
+          span("quand", `${r.jour} · ${r.creneau}`),
+          span("nom", `${r.nom} · ${r.places} places`),
+          actions
+        );
+        liste.appendChild(li);
       }
     }
 
     async function annuler(id) {
       await fetch("/api/reservations/" + id, { method: "DELETE" });
-      chargerReservations();
+      afficher();
     }
 
-    document.getElementById("form").addEventListener("submit", async (e) => {
+    document.getElementById("formulaire").addEventListener("submit", async (e) => {
       e.preventDefault();
       const donnees = Object.fromEntries(new FormData(e.target));
       const reponse = await fetch("/api/reservations", {
@@ -77,13 +108,13 @@
         body: JSON.stringify(donnees),
       });
       const resultat = await reponse.json();
-      document.getElementById("message").textContent = resultat.message || resultat.erreur;
+      document.getElementById("message").textContent = reponse.ok ? "" : resultat.erreur;
       if (reponse.ok) e.target.reset();
-      chargerReservations();
+      afficher();
     });
 
     chargerSalons();
-    chargerReservations();
+    afficher();
   </script>
 </body>
 </html>
