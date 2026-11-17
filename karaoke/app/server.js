@@ -44,11 +44,29 @@ const RESERVATIONS_DE_DEPART = [
   ["Salon Jazz", "2026-11-23", "19:00 - 21:00", "Duo Tom & Sarah", 2],
 ];
 
-// Se connecte à la base, crée la table si besoin et ajoute les données de départ.
+// Les salons et leur nombre de places par session.
+const SALONS = [
+  ["Salon Disco", 20],
+  ["Salon Rock", 15],
+  ["Salon Pop", 10],
+  ["Salon Jazz", 6],
+];
+
+// Se connecte à la base, crée les tables si besoin et ajoute les données de départ.
 // Si la base n'est pas joignable, on réessaie toutes les 2 secondes
 // au lieu de planter : l'application reste utilisable sans base.
 async function connecterLaBase() {
   try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS salons (
+        nom text PRIMARY KEY,
+        capacite int NOT NULL
+      )
+    `);
+    for (const s of SALONS) {
+      await pool.query("INSERT INTO salons (nom, capacite) VALUES ($1, $2) ON CONFLICT DO NOTHING", s);
+    }
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS reservations (
         id serial PRIMARY KEY,
@@ -108,9 +126,14 @@ app.get("/api/reservations", async (req, res) => {
     return res.status(503).json({ erreur: "base non connectée" });
   }
   try {
-    const { rows } = await pool.query(
-      "SELECT id, salon, to_char(jour, 'YYYY-MM-DD') AS jour, creneau, nom, places FROM reservations ORDER BY jour, creneau, id"
-    );
+    // "restantes" = capacité du salon - places déjà prises sur la même session
+    const { rows } = await pool.query(`
+      SELECT r.id, r.salon, to_char(r.jour, 'YYYY-MM-DD') AS jour, r.creneau, r.nom, r.places,
+             (s.capacite - SUM(r.places) OVER (PARTITION BY r.salon, r.jour, r.creneau))::int AS restantes
+      FROM reservations r
+      JOIN salons s ON s.nom = r.salon
+      ORDER BY r.jour, r.creneau, r.id
+    `);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ erreur: err.message });
@@ -131,6 +154,23 @@ app.post("/api/reservations", async (req, res) => {
     return res.status(400).json({ erreur: "places doit être un entier entre 1 et " + PLACES_MAX });
   }
   try {
+    // On vérifie qu'il reste assez de places sur cette session
+    const session = await pool.query(
+      `SELECT (s.capacite - COALESCE(SUM(r.places), 0))::int AS restantes
+       FROM salons s
+       LEFT JOIN reservations r ON r.salon = s.nom AND r.jour = $2 AND r.creneau = $3
+       WHERE s.nom = $1
+       GROUP BY s.capacite`,
+      [salon, jour, creneau]
+    );
+    if (session.rows.length === 0) {
+      return res.status(400).json({ erreur: "salon inconnu" });
+    }
+    const restantes = session.rows[0].restantes;
+    if (places > restantes) {
+      return res.status(400).json({ erreur: "plus que " + restantes + " places pour cette session" });
+    }
+
     const { rows } = await pool.query(
       "INSERT INTO reservations (salon, jour, creneau, nom, places) VALUES ($1, $2, $3, $4, $5) RETURNING id, salon, to_char(jour, 'YYYY-MM-DD') AS jour, creneau, nom, places",
       [salon, jour, creneau, nom, places]
