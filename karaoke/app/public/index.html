@@ -37,7 +37,7 @@
       }
       for (const r of await reponse.json()) {
         const li = document.createElement("li");
-        li.textContent = `${r.jour} ${r.creneau} - ${r.salon} - ${r.nom} (${r.places} places)`;
+        li.textContent = `${r.jour} ${r.creneau} - ${r.salon} - ${r.nom} (${r.places} places) - reste ${r.restantes} places`;
         liste.appendChild(li);
       }
     }
