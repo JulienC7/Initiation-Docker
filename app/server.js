@@ -1,194 +1,111 @@
-// ---------------------------------------------------------------------------
-// Karaoke Booking - réservation de places pour des sessions de karaoké
-//
-// Ce qu'elle fait :
-//   - elle affiche une page web (public/index.html) ;
-//   - elle se connecte à une base PostgreSQL si on lui dit où la trouver ;
-//   - elle liste et enregistre des réservations de salons de karaoké.
-// ---------------------------------------------------------------------------
+// Karaoke Booking : API pour réserver des places dans les salons de karaoké
 
-const os = require("node:os");
-const path = require("node:path");
 const express = require("express");
 const { Pool } = require("pg");
 
-// Le port sur lequel l'application écoute. 3000 si on ne précise rien.
-const PORT = process.env.PORT || 3000;
-
-// Nombre maximum de places par réservation.
-const PLACES_MAX = 12;
-
-// La connexion à la base.
-// AUCUN mot de passe ici : la librairie "pg" lit toute seule les variables
-// d'environnement PGHOST, PGPORT, PGUSER, PGPASSWORD et PGDATABASE.
-// C'est Docker (compose.yaml + .env) qui les fournit.
-const pool = new Pool();
-
-let baseConnectee = false;
-let dernierMessage = "";
-
-// Évite que l'application plante si la base disparaît en cours de route.
-pool.on("error", (err) => {
-  console.error("Base : connexion perdue (" + err.message + ")");
-  baseConnectee = false;
-  setTimeout(connecterLaBase, 2000);
-});
-
-// Quelques réservations inventées, ajoutées si la table est vide.
-// [salon, jour, créneau, nom, places]
-const RESERVATIONS_DE_DEPART = [
-  ["Salon Disco", "2026-11-20", "20:00 - 22:00", "Anniversaire de Léa", 8],
-  ["Salon Rock", "2026-11-20", "21:00 - 23:00", "Soirée BDE", 12],
-  ["Salon Pop", "2026-11-21", "18:00 - 19:30", "Afterwork équipe web", 6],
-  ["Salon Disco", "2026-11-22", "22:00 - 00:00", "EVJF Camille", 10],
-  ["Salon Jazz", "2026-11-23", "19:00 - 21:00", "Duo Tom & Sarah", 2],
-];
-
-// Les salons et leur nombre de places par session.
-const SALONS = [
-  ["Salon Disco", 20],
-  ["Salon Rock", 15],
-  ["Salon Pop", 10],
-  ["Salon Jazz", 6],
-];
-
-// Se connecte à la base, crée les tables si besoin et ajoute les données de départ.
-// Si la base n'est pas joignable, on réessaie toutes les 2 secondes
-// au lieu de planter : l'application reste utilisable sans base.
-async function connecterLaBase() {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS salons (
-        nom text PRIMARY KEY,
-        capacite int NOT NULL
-      )
-    `);
-    for (const s of SALONS) {
-      await pool.query("INSERT INTO salons (nom, capacite) VALUES ($1, $2) ON CONFLICT DO NOTHING", s);
-    }
-
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS reservations (
-        id serial PRIMARY KEY,
-        salon text NOT NULL,
-        jour date NOT NULL,
-        creneau text NOT NULL,
-        nom text NOT NULL,
-        places int NOT NULL CHECK (places BETWEEN 1 AND ${PLACES_MAX}),
-        cree_le timestamptz DEFAULT now()
-      )
-    `);
-
-    const { rows } = await pool.query("SELECT count(*)::int AS total FROM reservations");
-    if (rows[0].total === 0) {
-      for (const r of RESERVATIONS_DE_DEPART) {
-        await pool.query(
-          "INSERT INTO reservations (salon, jour, creneau, nom, places) VALUES ($1, $2, $3, $4, $5)",
-          r
-        );
-      }
-      console.log("Base : table créée et remplie avec " + RESERVATIONS_DE_DEPART.length + " réservations d'exemple");
-    }
-
-    baseConnectee = true;
-    console.log("Base : connectée");
-  } catch (err) {
-    baseConnectee = false;
-    // On n'affiche le message que s'il change, pour ne pas inonder les logs.
-    const message = "Base : non connectée (" + err.message + "), nouvel essai toutes les 2 s";
-    if (message !== dernierMessage) console.log(message);
-    dernierMessage = message;
-    setTimeout(connecterLaBase, 2000);
-  }
-}
-
 const app = express();
 app.use(express.json());
+app.use(express.static("public"));
 
-// La page web.
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+// pg récupère tout seul PGHOST, PGUSER, PGPASSWORD et PGDATABASE (donnés par le compose)
+const db = new Pool();
+
+// Création des tables au démarrage (si elles n'existent pas déjà)
+async function initBase() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS salons (
+      nom text PRIMARY KEY,
+      capacite int NOT NULL
+    )
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS reservations (
+      id serial PRIMARY KEY,
+      salon text NOT NULL REFERENCES salons(nom),
+      jour date NOT NULL,
+      creneau text NOT NULL,
+      nom text NOT NULL,
+      places int NOT NULL
+    )
+  `);
+  await db.query(`
+    INSERT INTO salons (nom, capacite) VALUES
+      ('Salon Disco', 20), ('Salon Rock', 15), ('Salon Pop', 10), ('Salon Jazz', 6)
+    ON CONFLICT DO NOTHING
+  `);
+}
+
+// Places encore libres pour un salon, un jour et un créneau
+async function placesLibres(salon, jour, creneau) {
+  const result = await db.query(
+    `SELECT s.capacite - COALESCE(SUM(r.places), 0) AS libres
+     FROM salons s
+     LEFT JOIN reservations r ON r.salon = s.nom AND r.jour = $2 AND r.creneau = $3
+     WHERE s.nom = $1
+     GROUP BY s.capacite`,
+    [salon, jour, creneau]
+  );
+  if (result.rows.length === 0) return null; // salon qui n'existe pas
+  return Number(result.rows[0].libres);
+}
+
+// Liste des salons
+app.get("/api/salons", async (req, res) => {
+  const result = await db.query("SELECT * FROM salons ORDER BY nom");
+  res.json(result.rows);
 });
 
-// L'état de l'application. "conteneur" est le nom de la machine :
-// dans Docker, c'est l'identifiant du conteneur.
-app.get("/api/sante", (req, res) => {
-  res.json({
-    api: "ok",
-    base: baseConnectee ? "connectée" : "non connectée",
-    conteneur: os.hostname(),
-  });
-});
-
-// La liste des réservations.
+// Liste des réservations avec les places qui restent sur chaque session
 app.get("/api/reservations", async (req, res) => {
-  if (!baseConnectee) {
-    return res.status(503).json({ erreur: "base non connectée" });
-  }
-  try {
-    // "restantes" = capacité du salon - places déjà prises sur la même session
-    const { rows } = await pool.query(`
-      SELECT r.id, r.salon, to_char(r.jour, 'YYYY-MM-DD') AS jour, r.creneau, r.nom, r.places,
-             (s.capacite - SUM(r.places) OVER (PARTITION BY r.salon, r.jour, r.creneau))::int AS restantes
-      FROM reservations r
-      JOIN salons s ON s.nom = r.salon
-      ORDER BY r.jour, r.creneau, r.id
-    `);
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ erreur: err.message });
-  }
+  const result = await db.query(`
+    SELECT r.id, r.salon, to_char(r.jour, 'DD/MM/YYYY') AS jour, r.creneau, r.nom, r.places,
+           s.capacite - SUM(r.places) OVER (PARTITION BY r.salon, r.jour, r.creneau) AS libres
+    FROM reservations r
+    JOIN salons s ON s.nom = r.salon
+    ORDER BY r.jour, r.creneau
+  `);
+  res.json(result.rows);
 });
 
-// Ajouter une réservation.
+// Nouvelle réservation
 app.post("/api/reservations", async (req, res) => {
-  if (!baseConnectee) {
-    return res.status(503).json({ erreur: "base non connectée" });
-  }
-  const { salon, jour, creneau, nom } = req.body || {};
-  const places = Number(req.body?.places);
-  if (!salon || !jour || !creneau || !nom) {
-    return res.status(400).json({ erreur: "salon, jour, creneau et nom sont obligatoires" });
-  }
-  if (!Number.isInteger(places) || places < 1 || places > PLACES_MAX) {
-    return res.status(400).json({ erreur: "places doit être un entier entre 1 et " + PLACES_MAX });
-  }
-  try {
-    // On vérifie qu'il reste assez de places sur cette session
-    const session = await pool.query(
-      `SELECT (s.capacite - COALESCE(SUM(r.places), 0))::int AS restantes
-       FROM salons s
-       LEFT JOIN reservations r ON r.salon = s.nom AND r.jour = $2 AND r.creneau = $3
-       WHERE s.nom = $1
-       GROUP BY s.capacite`,
-      [salon, jour, creneau]
-    );
-    if (session.rows.length === 0) {
-      return res.status(400).json({ erreur: "salon inconnu" });
-    }
-    const restantes = session.rows[0].restantes;
-    if (places > restantes) {
-      return res.status(400).json({ erreur: "plus que " + restantes + " places pour cette session" });
-    }
+  const { salon, jour, creneau, nom } = req.body;
+  const places = parseInt(req.body.places);
 
-    const { rows } = await pool.query(
-      "INSERT INTO reservations (salon, jour, creneau, nom, places) VALUES ($1, $2, $3, $4, $5) RETURNING id, salon, to_char(jour, 'YYYY-MM-DD') AS jour, creneau, nom, places",
-      [salon, jour, creneau, nom, places]
-    );
-    res.status(201).json(rows[0]);
-  } catch (err) {
-    res.status(400).json({ erreur: err.message });
+  if (!salon || !jour || !creneau || !nom || !places || places < 1) {
+    return res.status(400).json({ erreur: "Il manque des informations" });
   }
+
+  const libres = await placesLibres(salon, jour, creneau);
+  if (libres === null) {
+    return res.status(400).json({ erreur: "Ce salon n'existe pas" });
+  }
+  if (places > libres) {
+    return res.status(400).json({ erreur: "Pas assez de places, il en reste " + libres });
+  }
+
+  await db.query(
+    "INSERT INTO reservations (salon, jour, creneau, nom, places) VALUES ($1, $2, $3, $4, $5)",
+    [salon, jour, creneau, nom, places]
+  );
+  res.status(201).json({ message: "Réservation enregistrée" });
 });
 
-// On démarre le serveur web tout de suite, puis on tente la base en tâche de fond.
-app.listen(PORT, () => {
-  console.log("Karaoke : application démarrée sur le port " + PORT);
-  connecterLaBase();
+// Annuler une réservation
+app.delete("/api/reservations/:id", async (req, res) => {
+  const result = await db.query("DELETE FROM reservations WHERE id = $1", [req.params.id]);
+  if (result.rowCount === 0) {
+    return res.status(404).json({ erreur: "Réservation introuvable" });
+  }
+  res.json({ message: "Réservation annulée" });
 });
 
-// Arrêt propre quand Docker demande au conteneur de s'arrêter (docker stop).
-process.on("SIGTERM", () => {
-  console.log("Karaoke : arrêt demandé, au revoir");
-  process.exit(0);
-});
+// On prépare la base puis on lance le serveur
+initBase()
+  .then(() => {
+    app.listen(3000, () => console.log("Karaoke Booking lancé sur le port 3000"));
+  })
+  .catch((err) => {
+    console.error("Impossible de se connecter à la base :", err.message);
+    process.exit(1);
+  });

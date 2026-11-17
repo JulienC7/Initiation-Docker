@@ -7,42 +7,68 @@
 <body>
   <h1>Karaoke Booking</h1>
 
-  <h2>Réservations</h2>
-  <ul id="liste"></ul>
+  <h2>Nos salons</h2>
+  <ul id="salons"></ul>
 
   <h2>Réserver</h2>
-  <form id="formulaire">
-    <select name="salon" required>
-      <option>Salon Disco</option>
-      <option>Salon Rock</option>
-      <option>Salon Pop</option>
-      <option>Salon Jazz</option>
-    </select>
+  <form id="form">
+    <select name="salon" id="choix-salon"></select>
     <input name="jour" type="date" required>
-    <input name="creneau" placeholder="20:00 - 22:00" required>
-    <input name="nom" placeholder="Nom" required>
-    <input name="places" type="number" min="1" max="12" placeholder="Places" required>
+    <select name="creneau">
+      <option>18:00 - 20:00</option>
+      <option>20:00 - 22:00</option>
+      <option>22:00 - 00:00</option>
+    </select>
+    <input name="nom" placeholder="Votre nom" required>
+    <input name="places" type="number" min="1" placeholder="Places" required>
     <button>Réserver</button>
   </form>
   <p id="message"></p>
 
+  <h2>Réservations</h2>
+  <table border="1">
+    <thead>
+      <tr><th>Jour</th><th>Créneau</th><th>Salon</th><th>Nom</th><th>Places</th><th>Places libres</th><th></th></tr>
+    </thead>
+    <tbody id="reservations"></tbody>
+  </table>
+
   <script>
-    async function afficher() {
-      const reponse = await fetch("/api/reservations");
-      const liste = document.getElementById("liste");
-      liste.innerHTML = "";
-      if (!reponse.ok) {
-        liste.textContent = "Base non connectée";
-        return;
-      }
-      for (const r of await reponse.json()) {
-        const li = document.createElement("li");
-        li.textContent = `${r.jour} ${r.creneau} - ${r.salon} - ${r.nom} (${r.places} places) - reste ${r.restantes} places`;
-        liste.appendChild(li);
+    async function chargerSalons() {
+      const salons = await fetch("/api/salons").then((r) => r.json());
+      document.getElementById("salons").innerHTML = salons
+        .map((s) => `<li>${s.nom} : ${s.capacite} places</li>`)
+        .join("");
+      document.getElementById("choix-salon").innerHTML = salons
+        .map((s) => `<option>${s.nom}</option>`)
+        .join("");
+    }
+
+    async function chargerReservations() {
+      const reservations = await fetch("/api/reservations").then((r) => r.json());
+      const tbody = document.getElementById("reservations");
+      tbody.innerHTML = "";
+      for (const r of reservations) {
+        const tr = document.createElement("tr");
+        for (const valeur of [r.jour, r.creneau, r.salon, r.nom, r.places, r.libres]) {
+          const td = document.createElement("td");
+          td.textContent = valeur;
+          tr.appendChild(td);
+        }
+        const bouton = document.createElement("button");
+        bouton.textContent = "Annuler";
+        bouton.onclick = () => annuler(r.id);
+        tr.appendChild(document.createElement("td")).appendChild(bouton);
+        tbody.appendChild(tr);
       }
     }
 
-    document.getElementById("formulaire").addEventListener("submit", async (e) => {
+    async function annuler(id) {
+      await fetch("/api/reservations/" + id, { method: "DELETE" });
+      chargerReservations();
+    }
+
+    document.getElementById("form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const donnees = Object.fromEntries(new FormData(e.target));
       const reponse = await fetch("/api/reservations", {
@@ -50,17 +76,14 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(donnees),
       });
-      const message = document.getElementById("message");
-      if (reponse.ok) {
-        message.textContent = "";
-        e.target.reset();
-      } else {
-        message.textContent = (await reponse.json()).erreur;
-      }
-      afficher();
+      const resultat = await reponse.json();
+      document.getElementById("message").textContent = resultat.message || resultat.erreur;
+      if (reponse.ok) e.target.reset();
+      chargerReservations();
     });
 
-    afficher();
+    chargerSalons();
+    chargerReservations();
   </script>
 </body>
 </html>
