@@ -9,7 +9,8 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD}
       PGDATABASE: ${POSTGRES_DB}
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
   db:
     image: postgres:18.1
@@ -19,6 +20,10 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      retries: 10
 
   adminer:
     image: adminer:5.4.1
