@@ -37,16 +37,21 @@ async function initBase() {
 
 // Places encore libres pour un salon, un jour et un créneau
 async function placesLibres(salon, jour, creneau) {
-  const result = await db.query(
-    `SELECT s.capacite - COALESCE(SUM(r.places), 0) AS libres
-     FROM salons s
-     LEFT JOIN reservations r ON r.salon = s.nom AND r.jour = $2 AND r.creneau = $3
-     WHERE s.nom = $1
-     GROUP BY s.capacite`,
+  // Capacité du salon
+  const s = await db.query("SELECT capacite FROM salons WHERE nom = $1", [salon]);
+  if (s.rows.length === 0) return null; // salon qui n'existe pas
+
+  // Places déjà réservées sur cette session
+  const r = await db.query(
+    "SELECT places FROM reservations WHERE salon = $1 AND jour = $2 AND creneau = $3",
     [salon, jour, creneau]
   );
-  if (result.rows.length === 0) return null; // salon qui n'existe pas
-  return Number(result.rows[0].libres);
+  let prises = 0;
+  for (const resa of r.rows) {
+    prises += resa.places;
+  }
+
+  return s.rows[0].capacite - prises;
 }
 
 // Liste des salons
@@ -57,14 +62,15 @@ app.get("/api/salons", async (req, res) => {
 
 // Liste des réservations avec les places qui restent sur chaque session
 app.get("/api/reservations", async (req, res) => {
-  const result = await db.query(`
-    SELECT r.id, r.salon, to_char(r.jour, 'DD/MM/YYYY') AS jour, r.creneau, r.nom, r.places,
-           s.capacite - SUM(r.places) OVER (PARTITION BY r.salon, r.jour, r.creneau) AS libres
-    FROM reservations r
-    JOIN salons s ON s.nom = r.salon
-    ORDER BY r.jour, r.creneau
-  `);
-  res.json(result.rows);
+  const result = await db.query(
+    "SELECT id, salon, to_char(jour, 'YYYY-MM-DD') AS jour, creneau, nom, places FROM reservations ORDER BY jour, creneau"
+  );
+  const reservations = result.rows;
+
+  for (const resa of reservations) {
+    resa.libres = await placesLibres(resa.salon, resa.jour, resa.creneau);
+  }
+  res.json(reservations);
 });
 
 // Nouvelle réservation
