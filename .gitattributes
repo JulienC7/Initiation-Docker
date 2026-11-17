@@ -1,0 +1,8 @@
+# Tout ce qui tourne dans un conteneur Linux garde des fins de ligne LF,
+# même si le repo est cloné sous Windows (sinon : "/bin/sh^M: not found").
+* text=auto eol=lf
+
+# Fichiers binaires : jamais convertis.
+*.png binary
+*.jpg binary
+*.ico binary
